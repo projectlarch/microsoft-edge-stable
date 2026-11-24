@@ -1,0 +1,77 @@
+name: Build
+
+# Every day: read the newest microsoft-edge-stable version from Microsoft's yum repository (in a Fedora
+# container) and, if it is newer than the latest release here, build the AppImage and publish a release
+# tagged with exactly that version (e.g. 142.0.3595.80). Run it by hand with "force" to rebuild the
+# current version and replace its files.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build and release even if this version is already released
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Install tools
+        run: dnf install -y git gh
+
+      - uses: actions/checkout@v4
+
+      - name: Compare repository and release versions
+        id: check
+        env:
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          repo=$(sh scripts/latest-version.sh)
+          released=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          echo "Repository: $repo"
+          echo "Released:   ${released:-none}"
+
+          build=false
+          if [ "$FORCE" = true ]; then
+            build=true
+          elif [ -z "$released" ]; then
+            build=true
+          elif [ "$repo" != "$released" ] &&
+               [ "$(printf '%s\n%s\n' "$released" "$repo" | sort -V | tail -n 1)" = "$repo" ]; then
+            build=true
+          fi
+          echo "Build: $build"
+          echo "version=$repo" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+      - name: Build the AppImage
+        if: steps.check.outputs.build == 'true'
+        run: sh scripts/build-appimage.sh "${{ steps.check.outputs.version }}"
+
+      - name: Publish the release
+        if: steps.check.outputs.build == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" dist/* --clobber
+          else
+            gh release create "$VERSION" dist/* \
+              --target "$GITHUB_SHA" \
+              --title "Microsoft Edge $VERSION" \
+              --latest \
+              --notes "Microsoft Edge Stable $VERSION (x86_64), repacked unmodified from Microsoft's RPM repository (https://packages.microsoft.com/yumrepos/edge) as an AppImage. Unofficial; not affiliated with Microsoft."
+          fi
