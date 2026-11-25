@@ -32,7 +32,7 @@ jobs:
       - name: Install tools
         run: dnf install -y git gh
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Compare repository and release versions
         id: check
