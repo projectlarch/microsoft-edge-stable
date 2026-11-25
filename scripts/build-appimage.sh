@@ -44,6 +44,20 @@ rm -f "$APPDIR/$EDGE/msedge-sandbox" "$APPDIR/$EDGE/chrome-sandbox"
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/sh
 HERE=$(dirname "$(readlink -f "$0")")
+
+# Edge records where it found Widevine (the DRM module, shipped in WidevineCdm/) in a hint file and
+# loads Widevine from that path at the next start. An AppImage is mounted at a new random
+# /tmp/.mount_* path each run, so the hint always names the previous, gone mount and DRM video
+# fails. Drop such a stale hint; Edge then loads the bundled copy and writes a fresh hint.
+PROFILE=${XDG_CONFIG_HOME:-$HOME/.config}/microsoft-edge
+for arg in "$@"; do
+  case $arg in --user-data-dir=*) PROFILE=${arg#--user-data-dir=} ;; esac
+done
+HINT="$PROFILE/WidevineCdm/latest-component-updated-widevine-cdm"
+if [ -f "$HINT" ] && grep -q '/\.mount_' "$HINT" && ! grep -qF "\"$HERE/" "$HINT"; then
+  rm -f "$HINT"
+fi
+
 exec "$HERE/opt/microsoft/msedge/microsoft-edge" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
